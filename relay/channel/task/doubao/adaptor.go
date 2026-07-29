@@ -64,7 +64,8 @@ type requestPayload struct {
 }
 
 type responsePayload struct {
-	ID string `json:"id"` // task_id
+	ID     string `json:"id"`      // native VolcEngine format
+	TaskID string `json:"task_id"` // new-api relay fallback
 }
 
 type responseTask struct {
@@ -222,7 +223,11 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 		return
 	}
 
-	if dResp.ID == "" {
+	upstreamID := dResp.ID
+	if upstreamID == "" {
+		upstreamID = dResp.TaskID
+	}
+	if upstreamID == "" {
 		taskErr = service.TaskErrorWrapper(fmt.Errorf("task_id is empty"), "invalid_response", http.StatusInternalServerError)
 		return
 	}
@@ -234,7 +239,7 @@ func (a *TaskAdaptor) DoResponse(c *gin.Context, resp *http.Response, info *rela
 	ov.Model = info.OriginModelName
 
 	c.JSON(http.StatusOK, ov)
-	return dResp.ID, responseBody, nil
+	return upstreamID, responseBody, nil
 }
 
 // FetchTask fetch task status
