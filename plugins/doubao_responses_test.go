@@ -1133,6 +1133,21 @@ func TestDoubaoNativeOfficialBodies(t *testing.T) {
 		assert.Equal(t, map[string]any{"model": seedance, "content": []any{map[string]any{"type": "text", "text": "a cat"}}}, descriptor["body"])
 	})
 
+	// An upstream gateway relaying the Ark format answers the create call with
+	// its own task id under task_id and no Ark id; the task must be created
+	// from it instead of failing with "task_id is empty".
+	t.Run("a create reply without id falls back to task_id", func(t *testing.T) {
+		ctx := map[string]any{"model": seedance, "upstreamModel": seedance, "publicTaskId": "task_public"}
+		parsed, err := call([]string{"parseSubmitResponse"}, ctx, map[string]any{"body": map[string]any{"task_id": "cgt-1"}})
+		require.NoError(t, err)
+		assert.Equal(t, "cgt-1", parsed["taskId"])
+		parsed, err = call([]string{"parseSubmitResponse"}, ctx, map[string]any{"body": map[string]any{"id": "cgt-2"}})
+		require.NoError(t, err)
+		assert.Equal(t, "cgt-2", parsed["taskId"])
+		_, err = call([]string{"parseSubmitResponse"}, ctx, map[string]any{"body": map[string]any{}})
+		require.ErrorContains(t, err, "task_id is empty")
+	})
+
 	t.Run("query replies", func(t *testing.T) {
 		created, err := call([]string{"native", "taskStatus"}, map[string]any{}, map[string]any{"task_id": "task_pub", "status": "SUBMITTED", "data": map[string]any{"id": "task_pub"}})
 		require.NoError(t, err)

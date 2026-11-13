@@ -904,8 +904,11 @@ export function parseSubmitResponse(ctx, resp) {
     const url = payloads.find((item) => trimmed(item.url));
     return { taskId: taskId, taskData: body, immediate: { status: "SUCCESS", progress: "100%", url: url ? trimmed(url.url) : "" } };
   }
-  if (!resp.body || !resp.body.id) throw new Error("task_id is empty");
-  return { taskId: resp.body.id, taskData: resp.body };
+  // Ark answers with {id}; a gateway relaying this format may answer with its
+  // own task id under task_id instead, so accept either.
+  const upstreamID = trimmed((resp.body || {}).id) || trimmed((resp.body || {}).task_id);
+  if (!upstreamID) throw new Error("task_id is empty");
+  return { taskId: upstreamID, taskData: resp.body };
 }
 
 export function extractUsage(ctx) {
