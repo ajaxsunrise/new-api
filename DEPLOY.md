@@ -13,6 +13,7 @@
 - [配置说明](#配置说明)
 - [启动服务](#启动服务)
 - [停止与重启](#停止与重启)
+- [从 rc.22 升级到 rc.50](#从-rc22-升级到-rc50)
 - [Docker 部署（参考）](#docker-部署参考)
 
 ---
@@ -21,14 +22,13 @@
 
 | 依赖 | 版本要求 | 说明 |
 |------|---------|------|
-| Go | >= 1.22 | 后端编译 |
-| Bun | >= 1.0 | 前端包管理与构建（推荐） |
-| Node.js | >= 18 | 可替代 Bun（不推荐） |
-| Git | 任意 | 拉取代码 |
+| Go | >= 1.26（以 `go.mod` 为准） | 后端编译 |
+| Bun | >= 1.0 | 前端包管理与构建 |
+| Git | 任意 | 拉取代码、生成版本号 |
 
 ## 构建前端
 
-前端位于 `web/` 目录，基于 React 18 + Vite 构建，产出静态文件到 `web/dist/`。
+前端位于 `web/` 目录，基于 React 19 + Rsbuild 构建，产出静态文件到 `web/dist/`。
 
 ### 1. 安装依赖
 
@@ -43,8 +43,8 @@ bun install
 # 方式一：直接构建
 bun run build
 
-# 方式二：带版本号构建（推荐，版本号会注入到前端）
-DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat ../VERSION) bun run build
+# 方式二：带版本号构建（推荐，版本号会注入到前端；与官方 CI 一致）
+DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cd .. && git describe --tags --match 'v[0-9]*') bun run build
 ```
 
 构建完成后，静态文件输出到 `web/dist/`。
@@ -65,8 +65,11 @@ go mod download
 # 基础编译
 go build -o new-api
 
-# 推荐：带版本号 + 裁剪符号表（体积更小）
-go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
+# 推荐：与官方 CI 一致（PGO 优化 + 版本号注入 + 静态链接 + 裁剪符号表）
+VERSION=$(git describe --tags --match 'v[0-9]*')
+go build -pgo="$(go list -m -f '{{.Dir}}' github.com/MoeForge/moejs)/default.pgo" \
+  -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION' -extldflags '-static'" \
+  -o new-api
 ```
 
 参数说明：
@@ -74,7 +77,9 @@ go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat
 | 参数 | 说明 |
 |------|------|
 | `-s -w` | 裁剪调试信息和符号表，减小二进制体积 |
-| `-X '...Version=...'` | 将版本号注入到 `common.Version` 变量 |
+| `-X '...Version=...'` | 将版本号注入到 `common.Version` 变量（仓库内 `VERSION` 文件为空，版本号来自 `git describe`，也可用环境变量 `VERSION` 在运行时覆盖） |
+| `-pgo .../moejs/default.pgo` | 按 moejs（JS 插件运行时）的性能 profile 做 PGO 编译优化，官方 CI 使用 |
+| `-extldflags '-static'` | 静态链接，产物不依赖系统库 |
 | `-o new-api` | 指定输出文件名 |
 
 编译完成后，当前目录下生成 `new-api` 可执行文件。
@@ -84,38 +89,43 @@ go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat
 ```bash
 #!/bin/bash
 set -e
+VERSION=$(git describe --tags --match 'v[0-9]*')
 
 # 1. 构建前端
 cd web
-bun install
-DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$(cat ../VERSION) bun run build
+bun install --frozen-lockfile
+DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$VERSION bun run build
 cd ..
 
 # 2. 构建后端
-go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
+go build -pgo="$(go list -m -f '{{.Dir}}' github.com/MoeForge/moejs)/default.pgo" \
+  -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION' -extldflags '-static'" \
+  -o new-api
 
-echo "构建完成: ./new-api"
+echo "构建完成: ./new-api ($VERSION)"
 ```
 
 ## 交叉编译
 
-如需在其他平台上运行，使用 Go 的交叉编译能力：
+如需在其他平台上运行，使用 Go 的交叉编译能力（版本号统一用 `VERSION=$(git describe --tags --match 'v[0-9]*')` 生成）：
 
 ```bash
+VERSION=$(git describe --tags --match 'v[0-9]*')
+
 # Linux AMD64
-GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api-linux-amd64
+GOOS=linux GOARCH=amd64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o new-api-linux-amd64
 
 # Linux ARM64
-GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api-linux-arm64
+GOOS=linux GOARCH=arm64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o new-api-linux-arm64
 
 # macOS AMD64
-GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api-darwin-amd64
+GOOS=darwin GOARCH=amd64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o new-api-darwin-amd64
 
 # macOS ARM64 (Apple Silicon)
-GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api-darwin-arm64
+GOOS=darwin GOARCH=arm64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o new-api-darwin-arm64
 
 # Windows AMD64
-GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api-windows-amd64.exe
+GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION'" -o new-api-windows-amd64.exe
 ```
 
 > **注意**：如果启用了 CGO（如依赖 SQLite 的 CGO 驱动），交叉编译需要对应平台的 C 工具链。默认 `CGO_ENABLED=0` 编译为纯静态二进制，使用 Go 内置的 SQLite 驱动。
@@ -323,6 +333,50 @@ sudo journalctl -u new-api -f
 kill $(cat .server.pid)
 ```
 
+## 从 rc.22 升级到 rc.50
+
+rc.23 起上游将 task 适配器（doubao/sora/kling 等）从 Go 代码迁移为 JS 插件（`plugins/tasks/`，由 moejs 执行），并重写了 git 历史，因此升级方式为**整包替换二进制**，不能用 `git pull` 增量更新。
+
+### 兼容性（已在生产库副本上验证）
+
+- 数据库迁移为**纯增量**：新增 `task_plugins`、`user_access_tokens`、`audit_logs`、`login_encryption_keys` 四张表，及 `tokens.auto_groups`、`users.access_token_created_at` 等若干列，无删除或重命名，PostgreSQL 上自动完成
+- 用户/渠道/Token/日志数据完全保留
+- `.env` 配置项（`SQL_DSN`、`SESSION_SECRET`、`REDIS_CONN_STRING` 等）无需改动
+- 注意：dashboard 会话机制有变更，升级后管理员和用户可能需要重新登录
+
+### 升级步骤
+
+```bash
+# 1. 备份数据库（回滚依据）
+set -a; source .env; set +a
+mkdir -p ~/backups
+pg_dump "$SQL_DSN" > ~/backups/db_new_api_$(date +%Y%m%d_%H%M).sql
+
+# 2. 备份旧二进制
+cp new-api new-api-rc22.bak
+
+# 3. 构建新包（见上文"完整的一键构建脚本"，需在 rc50-local 分支）
+
+# 4. 重启（自动完成数据库迁移）
+./restart.sh
+
+# 5. 验证
+curl -s http://localhost:3000/api/status | grep -o '"version":"[^"]*"'
+```
+
+### 回滚
+
+```bash
+./stop.sh
+cp new-api-rc22.bak new-api
+# 恢复数据库（迁移是增量的，不恢复数据库通常也能跑，但完整回滚以备份为准）
+set -a; source .env; set +a
+psql "$SQL_DSN" -c "DROP DATABASE db_new_api;"
+psql "$SQL_DSN" -c "CREATE DATABASE db_new_api;"
+psql "$SQL_DSN" -f ~/backups/db_new_api_<备份时间>.sql
+./start.sh
+```
+
 ## Docker 部署（参考）
 
 项目自带 `Dockerfile`，支持多阶段构建：
@@ -351,10 +405,12 @@ Dockerfile 的构建流程：
 ## 典型部署流程总结
 
 ```
-1. git clone <repo> && cd new-api
-2. cd web && bun install && bun run build && cd ..
-3. go build -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$(cat VERSION)'" -o new-api
-4. cp .env.example .env  # 编辑 .env，至少配置 SESSION_SECRET 和 SQL_DSN
-5. ./new-api             # 或 ./start.sh / systemctl start new-api
-6. 访问 http://localhost:3000
+1. git clone <repo> && cd new-api && git checkout rc50-local
+2. VERSION=$(git describe --tags --match 'v[0-9]*')
+3. cd web && bun install && DISABLE_ESLINT_PLUGIN='true' VITE_REACT_APP_VERSION=$VERSION bun run build && cd ..
+4. go build -pgo="$(go list -m -f '{{.Dir}}' github.com/MoeForge/moejs)/default.pgo" \
+     -ldflags "-s -w -X 'github.com/QuantumNous/new-api/common.Version=$VERSION' -extldflags '-static'" -o new-api
+5. cp .env.example .env  # 编辑 .env，至少配置 SESSION_SECRET 和 SQL_DSN
+6. ./new-api             # 或 ./start.sh / systemctl start new-api
+7. 访问 http://localhost:3000
 ```
